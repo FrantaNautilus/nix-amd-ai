@@ -39,8 +39,9 @@ stdenv.mkDerivation rec {
     rpm2cpio $src | cpio -idm
   '';
 
-  # Patch backend_versions.json to match our FLM version.
-  # The file is explicitly designed to be user-editable (see its "comment" field).
+  # Lemonade v10.2.0 requires exact FLM version match; override to accept ours.
+  # Remove after upgrading to a release containing lemonade-sdk/lemonade#1652
+  # (>= semver comparison for FLM on Linux).
   postPatch = ''
     jq '.flm.npu = "v${fastflowlm.version}"' \
       opt/share/lemonade-server/resources/backend_versions.json > tmp.json
