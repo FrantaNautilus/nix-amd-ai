@@ -19,7 +19,9 @@ backend but the measured decode t/s will be far below
 
 import argparse
 import json
+import os
 import statistics
+import subprocess
 import sys
 import time
 import urllib.error
@@ -70,6 +72,70 @@ def http_post_stream(base_url, path, payload, timeout=300):
                 line = line.rstrip(b"\r")
                 if line.startswith(b"data: "):
                     yield line[6:].decode("utf-8", errors="replace")
+
+
+def set_llamacpp_backend(config_path, backend):
+    """Write llamacpp.backend into lemonade's config.json.
+
+    Returns the previous value (or None if the key was absent), so the
+    caller can restore state on exit.
+    """
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    else:
+        config = {}
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+
+    llamacpp = config.setdefault("llamacpp", {})
+    prev = llamacpp.get("backend")
+    llamacpp["backend"] = backend
+
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+    return prev
+
+
+def restore_llamacpp_backend(config_path, prev):
+    """Restore a previously captured llamacpp.backend value."""
+    if not os.path.exists(config_path):
+        return
+    with open(config_path, "r") as f:
+        config = json.load(f)
+    llamacpp = config.setdefault("llamacpp", {})
+    if prev is None:
+        llamacpp.pop("backend", None)
+    else:
+        llamacpp["backend"] = prev
+    with open(config_path, "w") as f:
+        json.dump(config, f, indent=2)
+
+
+def restart_lemond(service):
+    """Restart lemond via sudo systemctl. Raises on failure."""
+    print(
+        f"  Restarting {service} (may prompt for sudo)...",
+        file=sys.stderr,
+    )
+    subprocess.run(
+        ["sudo", "systemctl", "restart", service],
+        check=True,
+    )
+
+
+def wait_for_lemond(base_url, timeout=60):
+    """Poll /api/v1/models until lemond answers, or raise TimeoutError."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            http_get(base_url, "/api/v1/models")
+            return
+        except (urllib.error.URLError, ConnectionError, OSError):
+            time.sleep(1)
+    raise TimeoutError(
+        f"lemond did not become reachable at {base_url} within"
+        f" {timeout}s"
+    )
 
 
 def check_backends(_base_url, _required_recipes):
@@ -354,6 +420,36 @@ def main():
             " falls below this (signals CPU fallback)"
         ),
     )
+    parser.add_argument(
+        "--backend",
+        choices=["rocm", "vulkan", "auto"],
+        default=None,
+        help=(
+            "Force llamacpp.backend in lemonade config and restart"
+            " lemond before benchmarking (llamacpp-recipe models only)."
+            " Original config is restored on exit."
+            " Requires sudo unless --no-restart is set."
+        ),
+    )
+    parser.add_argument(
+        "--config-path",
+        default=os.path.expanduser("~/.cache/lemonade/config.json"),
+        help="Path to lemonade's config.json",
+    )
+    parser.add_argument(
+        "--lemond-service",
+        default="lemond.service",
+        help="systemd service name to restart when --backend is set",
+    )
+    parser.add_argument(
+        "--no-restart",
+        action="store_true",
+        help=(
+            "Skip sudo systemctl restart after writing the config."
+            " Useful if you've already restarted lemond manually or"
+            " are running in an environment without sudo."
+        ),
+    )
     args = parser.parse_args()
 
     model_ids = args.model_ids
@@ -364,18 +460,69 @@ def main():
         file=sys.stderr,
     )
 
+    # Optionally force a specific llamacpp backend by rewriting
+    # lemonade's config.json + restarting lemond. Guaranteed to be
+    # restored on exit via try/finally below.
+    forced_backend = args.backend
+    prev_backend = None
+    backend_forced = False
+    if forced_backend is not None:
+        prev_backend = set_llamacpp_backend(
+            args.config_path, forced_backend
+        )
+        backend_forced = True
+        print(
+            f"  Forced llamacpp.backend = {forced_backend!r}"
+            f" (was {prev_backend!r}) in {args.config_path}",
+            file=sys.stderr,
+        )
+        if not args.no_restart:
+            restart_lemond(args.lemond_service)
+            wait_for_lemond(base_url)
+
+    try:
+        run_benchmarks(args, base_url, model_ids, forced_backend)
+    finally:
+        if backend_forced:
+            restore_llamacpp_backend(args.config_path, prev_backend)
+            print(
+                f"  Restored llamacpp.backend to {prev_backend!r}",
+                file=sys.stderr,
+            )
+            if not args.no_restart:
+                try:
+                    restart_lemond(args.lemond_service)
+                except subprocess.CalledProcessError as exc:
+                    print(
+                        f"  WARNING: failed to restart lemond during"
+                        f" cleanup: {exc}",
+                        file=sys.stderr,
+                    )
+
+
+def run_benchmarks(args, base_url, model_ids, forced_backend):
+    """Execute the benchmark against an already-prepared lemond."""
     # Step 1: get model info to find recipes, validate models exist
     model_map = check_models(base_url, model_ids)
 
-    # Step 2: collect required recipes and validate backends are ready
-    required_recipes = set()
-    for mid in model_ids:
-        recipe = (
+    def model_recipe(mid):
+        raw = (
             model_map[mid].get("recipe")
             or model_map[mid].get("backend")
             or "unknown"
         )
-        required_recipes.add(recipe)
+        # When the user forces a specific llamacpp backend, rewrite the
+        # recipe label so the table reflects what actually ran. FLM and
+        # other non-llamacpp recipes are untouched.
+        if (
+            forced_backend in ("rocm", "vulkan")
+            and raw.startswith("llamacpp")
+        ):
+            return f"llamacpp:{forced_backend}"
+        return raw
+
+    # Step 2: collect required recipes and validate backends are ready
+    required_recipes = {model_recipe(mid) for mid in model_ids}
 
     print(
         "Required recipes: " + ", ".join(sorted(required_recipes)),
@@ -388,11 +535,7 @@ def main():
     below_threshold = []
 
     for mid in model_ids:
-        recipe = (
-            model_map[mid].get("recipe")
-            or model_map[mid].get("backend")
-            or "unknown"
-        )
+        recipe = model_recipe(mid)
         print(
             f"\nBenchmarking {mid!r} (recipe={recipe})...",
             file=sys.stderr,

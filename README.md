@@ -117,6 +117,15 @@ nix run .#benchmark -- Gemma-4-26B-A4B-it-GGUF
 
 The benchmark exits non-zero if any backend falls below `--min-decode-tps` (default 5 t/s), which reliably indicates a CPU fallback rather than GPU execution.
 
+To directly compare ROCm vs Vulkan on the same model, pass `--backend`. This rewrites `llamacpp.backend` in `~/.cache/lemonade/config.json`, restarts `lemond.service` (via sudo), runs the benchmark, and restores the original config on exit:
+
+```bash
+nix run .#benchmark -- --backend rocm   Phi-4-mini-instruct-GGUF
+nix run .#benchmark -- --backend vulkan Phi-4-mini-instruct-GGUF
+```
+
+If you've already set the backend manually, pass `--no-restart` to skip the sudo restart step.
+
 ## CI
 
 - **Build**: All packages built and cached on every push to `main`
