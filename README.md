@@ -30,7 +30,6 @@ inputs.nix-amd-ai.url = "github:noamsto/nix-amd-ai";
     enableLemonade = true;    # OpenAI-compatible API server
     enableROCm = true;        # Declaratively wires ROCm GPU backends for Lemonade
     enableVulkan = true;      # Declaratively wires Vulkan GPU backends for Lemonade
-    # rocmGfxOverride = "11.0.2";  # Strix Point gfx1150 → gfx1102 fallback (see below)
     lemonade.user = "youruser";
   };
 
@@ -63,7 +62,6 @@ trusted-public-keys = ["nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4
 - Lemonade systemd service with XRT/FLM/ROCm/Vulkan environment
 - Environment variables (`XILINX_XRT`, `XRT_PATH`)
 - Declarative backend wiring (both the `lemond` service and direct CLI usage receive the ROCm/Vulkan backend paths automatically)
-- `rocmGfxOverride`: set to `"11.0.2"` on Strix Point (gfx1150) to override the GFX version to gfx1102, enabling ROCm support on hardware not yet natively supported by ROCm. Example: `rocmGfxOverride = "11.0.2";`
 
 ### Why `enableROCm` / `enableVulkan` matter on NixOS
 
@@ -89,7 +87,7 @@ All numbers measured on Strix Point (gfx1150, Radeon 890M iGPU, 64 GiB DDR5-5600
 | Backend | Model | TTFT (s) | Decode (t/s) |
 | ------- | ----- | -------: | -----------: |
 | Vulkan (llamacpp:vulkan) | `Qwen3.5-9B-GGUF` (UD-Q4_K_XL) | 1.36 | 12.9 +/- 0.1 |
-| ROCm (llamacpp:rocm)     | `Qwen3.5-9B-GGUF` (UD-Q4_K_XL) | 1.85 | 9.6 +/- 0.1 |
+| ROCm (llamacpp:rocm)     | `Qwen3.5-9B-GGUF` (UD-Q4_K_XL) | 1.69 | 10.8 +/- 0.1 |
 | FLM (flm:npu)            | `qwen3.5-9b-FLM`               | 4.17 | 11.9 +/- 4.5 |
 
 Notes: FLM's TTFT is dominated by a one-off NPU compile-to-cache; steady-state decode is the useful number. FLM's GGUF-vs-proprietary format means quantization isn't bit-identical to the llamacpp row, so treat these as same-family, not same-weights.
@@ -99,7 +97,6 @@ Notes: FLM's TTFT is dominated by a one-off NPU compile-to-cache; steady-state d
 - **Interactive chat on mid-size models** (7–14B Q4): use **Vulkan**. Wins both TTFT and decode here — Vulkan's low per-dispatch overhead dominates when prefill batches are small.
 - **Prefill-heavy workloads on large models** (long-context, RAG, batch on 20B+): use **ROCm**. The rocBLAS GEMM advantage shows up as model size grows.
 - **Power-budget / idle-CPU scenarios**: use **FLM/NPU** — decode is competitive with Vulkan and offloads the GPU, but the compile-on-first-load TTFT is noticeable.
-- ROCm numbers will improve when ROCm ≥ 7.1 ships native gfx1150 kernels (currently requires gfx1102 override via `rocmGfxOverride`).
 
 Enable all three and let lemonade pick the recipe per model.
 

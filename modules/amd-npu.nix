@@ -47,12 +47,6 @@ in {
 
     enableVulkan = mkEnableOption "declarative Vulkan backend wiring for lemonade";
 
-    rocmGfxOverride = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = "HSA_OVERRIDE_GFX_VERSION value (e.g. \"11.0.2\" for Strix Point gfx1150 → gfx1102 fallback).";
-    };
-
     lemonade = {
       port = mkOption {
         type = types.port;
@@ -117,8 +111,6 @@ in {
       LEMONADE_LLAMACPP_ROCM_BIN = "${pkgs.llama-cpp-rocm}/bin/llama-server";
     } // optionalAttrs cfg.enableVulkan {
       LEMONADE_LLAMACPP_VULKAN_BIN = "${pkgs.llama-cpp-vulkan}/bin/llama-server";
-    } // optionalAttrs (cfg.enableROCm && cfg.rocmGfxOverride != null) {
-      HSA_OVERRIDE_GFX_VERSION = cfg.rocmGfxOverride;
     };
 
     # System packages
@@ -155,8 +147,7 @@ in {
           "PATH=${makeBinPath pathList}:/run/current-system/sw/bin"
         ]
         ++ optional cfg.enableROCm "LEMONADE_LLAMACPP_ROCM_BIN=${pkgs.llama-cpp-rocm}/bin/llama-server"
-        ++ optional cfg.enableVulkan "LEMONADE_LLAMACPP_VULKAN_BIN=${pkgs.llama-cpp-vulkan}/bin/llama-server"
-        ++ optional (cfg.enableROCm && cfg.rocmGfxOverride != null) "HSA_OVERRIDE_GFX_VERSION=${cfg.rocmGfxOverride}";
+        ++ optional cfg.enableVulkan "LEMONADE_LLAMACPP_VULKAN_BIN=${pkgs.llama-cpp-vulkan}/bin/llama-server";
       };
     };
   };
