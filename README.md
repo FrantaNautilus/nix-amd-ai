@@ -114,8 +114,8 @@ Tracked upstream as [lemonade-sdk/lemonade#1364](https://github.com/lemonade-sdk
 
 **Practical guidance:**
 
-- **Vulkan for chat and short prompts.** Decode is ~26 % faster than ROCm; for interactive conversations the prompt fits under the timeout easily.
-- **ROCm for heavy coding agents.** Prefill is marginally faster and often just enough to land under the ~30 s client cutoff with 10k-token prompts.
+- **Vulkan for short-prompt workloads.** Decode is ~26 % faster than ROCm; safe for chat UIs and ad-hoc prompts that stay roughly under 10k tokens, where prompt processing finishes well before the ~30 s client cutoff.
+- **ROCm for large-prompt workloads.** Its ~15 % faster prefill shaves 10k-token prompts from ~33 s (Vulkan) to ~28 s — just enough to land under most clients' silence timeout. Coding agents like Claude Code and opencode fall in this bucket.
 - **[pi](https://github.com/badlogic/pi-mono)** (Hugging Face's recommended local coding agent — see the [official docs](https://huggingface.co/docs/hub/en/agents-local)) is the best fit for this hardware. Its prompt is a fraction of Claude Code's and it's designed around llama.cpp-served local models.
 - **Claude Code / opencode** are usable — strip down MCP servers, skills, and plugins to shrink the startup prompt, and prefer ROCm while #1364 is unresolved.
 
