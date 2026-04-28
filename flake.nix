@@ -48,13 +48,19 @@
       }: let
         xrt = pkgs.callPackage ./pkgs/xrt {};
         fastflowlm = pkgs.callPackage ./pkgs/fastflowlm {inherit xrt;};
+        llama-cpp-vulkan = pkgs.llama-cpp.override {vulkanSupport = true;};
       in {
         packages = {
-          inherit xrt fastflowlm;
+          inherit xrt fastflowlm llama-cpp-vulkan;
           xrt-plugin-amdxdna = pkgs.callPackage ./pkgs/xrt-plugin-amdxdna {inherit xrt;};
           lemonade = pkgs.callPackage ./pkgs/lemonade {inherit fastflowlm;};
+          # WIP from-source build of lemonade (lemond + lemonade + lemonade-server only;
+          # no web app, no Tauri). Replaces the prebuilt RPM once verified.
+          lemonade-source = pkgs.callPackage ./pkgs/lemonade/from-source.nix {
+            inherit fastflowlm llama-cpp-vulkan;
+            llama-cpp-rocm = pkgs.llama-cpp-rocm;
+          };
           llama-cpp-rocm = pkgs.llama-cpp-rocm;
-          llama-cpp-vulkan = pkgs.llama-cpp.override {vulkanSupport = true;};
           benchmark = pkgs.callPackage ./pkgs/benchmark {};
         };
 
