@@ -12,24 +12,18 @@
 
       flake = {
         overlays.default = final: prev: let
-          xrt = final.callPackage ./pkgs/xrt {};
-          fastflowlm = final.callPackage ./pkgs/fastflowlm {inherit xrt;};
-          # Reach into nix-amd-ai's own nixpkgs input for packages whose
-          # version / build config needs to be stable regardless of the
-          # consumer's channel:
-          #   - libwebsockets: lemonade needs .so.20 (>= 4.4); nixos-25.11
-          #     still ships 4.3.5 (.so.19).
-          #   - llama-cpp-{rocm,vulkan}: older nixpkgs channels build without
-          #     gfx1150 in AMDGPU_TARGETS and predate recent Vulkan perf work.
-          # `prev` / `final` are the consumer's pkgs, so we import our input
-          # explicitly.
+          # Build everything against our own nixpkgs input rather than the
+          # consumer's `final`, so the input closure matches CI's and Cachix
+          # substitution works regardless of which channel the consumer is on.
           pinned = import inputs.nixpkgs {inherit (final.stdenv.hostPlatform) system;};
+          xrt = pinned.callPackage ./pkgs/xrt {};
+          fastflowlm = pinned.callPackage ./pkgs/fastflowlm {inherit xrt;};
           llama-cpp-vulkan = pinned.llama-cpp.override {vulkanSupport = true;};
         in {
           inherit xrt fastflowlm llama-cpp-vulkan;
           inherit (pinned) llama-cpp-rocm libwebsockets;
-          xrt-plugin-amdxdna = final.callPackage ./pkgs/xrt-plugin-amdxdna {inherit xrt;};
-          lemonade = final.callPackage ./pkgs/lemonade {
+          xrt-plugin-amdxdna = pinned.callPackage ./pkgs/xrt-plugin-amdxdna {inherit xrt;};
+          lemonade = pinned.callPackage ./pkgs/lemonade {
             inherit fastflowlm llama-cpp-vulkan;
             inherit (pinned) libwebsockets llama-cpp-rocm;
           };
