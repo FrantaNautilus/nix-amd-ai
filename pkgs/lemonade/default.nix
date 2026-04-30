@@ -132,6 +132,20 @@ in stdenv.mkDerivation {
         'DESTINATION /etc/lemonade/conf.d' \
         'DESTINATION share/lemonade/conf.d.example'
 
+    # FLM-recipe whisper models report their capabilities as
+    # ["realtime-transcription","transcription"] (the labels emitted by
+    # `flm list --json`). Lemonade's `get_model_type_from_labels` only
+    # recognises the literal label "audio", so FLM whisper falls through to
+    # ModelType::LLM and the audio router rejects every realtime call with
+    # `Audio transcription not supported by FLM llm model`. Teach the
+    # classifier that "transcription" / "realtime-transcription" also imply
+    # the AUDIO deployment mode. See lemonade-sdk/lemonade — no upstream
+    # issue yet at v${version}.
+    substituteInPlace src/cpp/include/lemon/model_types.h \
+      --replace-fail \
+        'if (label == "audio") {' \
+        'if (label == "audio" || label == "transcription" || label == "realtime-transcription") {'
+
     # Pin backend_versions.json to whatever fastflowlm / llama-cpp builds
     # we ship, so lemonade's "installed vs needs update" check stays
     # satisfied and it doesn't try to download backends at runtime.
