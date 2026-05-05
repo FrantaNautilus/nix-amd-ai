@@ -69,6 +69,16 @@ substituters = ["https://nix-amd-ai.cachix.org"];
 trusted-public-keys = ["nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4X9A7pvaBmhQ="];
 ```
 
+**Do not `.follows` our `nixpkgs` input.** The overlay is intentionally built against this flake's pinned `nixpkgs` (see `flake.nix` `pinned`) so the input closure hash matches both `cache.nixos.org` (Hydra-cached `pkgs.llama-cpp.override`, etc.) and our Cachix. If you add `inputs.nix-amd-ai.inputs.nixpkgs.follows = "nixpkgs"`, the overrides re-hash against your `nixpkgs` and every backend rebuilds from source. Just leave this input pinned:
+
+```nix
+# good — let nix-amd-ai keep its own pinned nixpkgs
+inputs.nix-amd-ai.url = "github:noamsto/nix-amd-ai";
+
+# bad — forces rebuilds of llama-cpp / whisper-cpp / stable-diffusion-cpp
+# inputs.nix-amd-ai.inputs.nixpkgs.follows = "nixpkgs";
+```
+
 ## Requirements
 
 - NixOS with kernel >= 6.14 (has `amdxdna` driver built-in)
