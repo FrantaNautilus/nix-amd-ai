@@ -12,7 +12,11 @@ AMD AI inference stack for NixOS — packages XRT, XDNA driver plugin, FastFlowL
 | `lemonade` | OpenAI-compatible local AI server (`lemond` + CLI + web UI + Tauri desktop app) | Built from [lemonade-sdk/lemonade](https://github.com/lemonade-sdk/lemonade) |
 | `llama-cpp-rocm` | ROCm-accelerated llama.cpp backend | Built from [ggerganov/llama.cpp](https://github.com/ggerganov/llama.cpp) |
 | `llama-cpp-vulkan` | Vulkan-accelerated llama.cpp backend | Built from [ggerganov/llama.cpp](https://github.com/ggerganov/llama.cpp) |
+| `whisper-cpp-vulkan` | Vulkan-accelerated whisper.cpp backend | `pkgs.whisper-cpp.override { vulkanSupport = true; }` |
+| `stable-diffusion-cpp-rocm` | ROCm-accelerated stable-diffusion.cpp backend | `pkgs.stable-diffusion-cpp.override { rocmSupport = true; }` |
 | `benchmark` | Multi-backend benchmark harness | `nix run .#benchmark` |
+
+CPU backends for llamacpp / whispercpp / sd-cpp use vanilla nixpkgs packages (`pkgs.llama-cpp`, `pkgs.whisper-cpp`, `pkgs.stable-diffusion-cpp`) and are wired automatically when `enableLemonade = true`.
 
 The `lemonade` package composes three derivations:
 
@@ -45,8 +49,9 @@ inputs.nix-amd-ai.url = "github:noamsto/nix-amd-ai";
     enable = true;
     enableFastFlowLM = true;  # LLM inference on NPU
     enableLemonade = true;    # OpenAI-compatible API server
-    enableROCm = true;        # Declaratively wires ROCm GPU backends for Lemonade
-    enableVulkan = true;      # Declaratively wires Vulkan GPU backends for Lemonade
+    enableROCm = true;        # ROCm GPU backends (llamacpp + sd-cpp)
+    enableVulkan = true;      # Vulkan GPU backends (llamacpp + whispercpp)
+    enableImageGen = true;    # default true; set false to drop sd-cpp from closure
     lemonade.user = "youruser";
   };
 
@@ -80,9 +85,24 @@ trusted-public-keys = ["nix-amd-ai.cachix.org-1:F4OU4vw/lV2oiG6SBHZ+nqjl4EFJuqI4
 - Environment variables (`XILINX_XRT`, `XRT_PATH`)
 - Declarative backend wiring (both the `lemond` service and direct CLI usage receive the ROCm/Vulkan backend paths automatically)
 
-### Why `enableROCm` / `enableVulkan` matter on NixOS
+### Why the module flags matter on NixOS
 
-The lemonade source build deliberately doesn't bundle backend `llama-server` binaries — it expects a host-provided path. `enableROCm = true` and `enableVulkan = true` wire in the `llama-cpp-rocm` / `llama-cpp-vulkan` packages built in this flake (correct RPATH for NixOS via `autoPatchelfHook`) by exporting `LEMONADE_LLAMACPP_{ROCM,VULKAN}_BIN`. The lemonade wrapper persists those paths into `~/.cache/lemonade/config.json` on every launch so both the `lemond` service and ad-hoc CLI invocations pick them up.
+The lemonade source build deliberately doesn't bundle backend `llama-server` / `whisper-server` / `sd-server` binaries — it expects host-provided paths. The module exports the matching env vars from the `lemond` service `Environment` and the user session, then lemonade migrates them into `~/.cache/lemonade/config.json`:
+
+| Flag | What gets wired |
+|---|---|
+| `enableLemonade` | CPU recipes always-on: `llamacpp:cpu`, `whispercpp:cpu`, `sd-cpp:cpu` (when `enableImageGen`) |
+| `enableROCm` | `llamacpp:rocm`, `llamacpp:system` (via `LEMONADE_GGML_HIP_PATH`), `sd-cpp:rocm` (when `enableImageGen`) |
+| `enableVulkan` | `llamacpp:vulkan`, `whispercpp:vulkan` |
+| `enableImageGen` (default true) | Gates all `sd-cpp:*` packages; turn off for ~150 MB CPU / ~1.5 GB ROCm savings on headless LLM-only hosts |
+
+Vanilla v10.3.0 ignores these env vars on NixOS for several reasons that this flake patches in-tree (see `pkgs/lemonade/default.nix:postPatch`, [issue #5](https://github.com/noamsto/nix-amd-ai/issues/5), upstream [lemonade-sdk/lemonade#1791](https://github.com/lemonade-sdk/lemonade/issues/1791)):
+
+- `install_backend` short-circuits on `find_external_backend_binary` *before* the `no_fetch_executables` throw and the rocm-stable / TheRock runtime fetches, so user-supplied `*_bin` paths actually skip the entire download flow.
+- The Linux ROCm `LD_LIBRARY_PATH` block is gated on the same check, so a nix-store `llama-server` keeps its RPATH-resolved libs instead of being shadowed by `~/.cache/lemonade/bin/.../lib`.
+- `is_ggml_hip_plugin_available()` honors `LEMONADE_GGML_HIP_PATH` so the `system` llamacpp recipe stops being permanently `unsupported` on NixOS.
+- `LEMONADE_WHISPERCPP_VULKAN_BIN` is added to the env-var migration table (upstream only mapped CPU/NPU for whispercpp).
+- `ConfigFile::load` re-applies the env overlay on every startup, not just first run, so bumping `pkgs.*` propagates without users having to delete `~/.cache/lemonade/config.json`.
 
 If `lemonade backends` reports a backend as `installed` but benchmarks report <5 t/s decode on a small model, you're on CPU — check that the matching `enable*` option is set and the host has been rebuilt.
 
@@ -142,16 +162,32 @@ You can verify that backends are correctly wired by running:
 lemonade backends
 ```
 
-The output should include both backends as `ready`:
+All AMD-applicable recipes should report `installed` (kokoro is intentionally skipped — Rust port, narrower use case):
 
 ```
-+------------------+-------------------------------------------------------+---------+
-|     BACKEND      |                         PATH                          | STATUS  |
-+------------------+-------------------------------------------------------+---------+
-| llamacpp:rocm    | /nix/store/...-llama-cpp-rocm-.../bin/llama-server    | ready   |
-| llamacpp:vulkan  | /nix/store/...-llama-cpp-vulkan-.../bin/llama-server  | ready   |
-+------------------+-------------------------------------------------------+---------+
+Recipe              Backend     Status          Message/Version
+flm                 npu         installed       v0.9.40
+llamacpp            cpu         installed       b8983
+                    rocm        installed       b8770
+                    system      installed       -
+                    vulkan      installed       b8770
+sd-cpp              cpu         installed       master-558-8afbeb6
+                    rocm        installed       master-558-8afbeb6
+whispercpp          cpu         installed       v1.8.4
+                    vulkan      installed       v1.8.4
 ```
+
+Quick image-gen smoke test (ROCm path):
+
+```bash
+lemonade pull SD-Turbo
+curl -s -X POST http://localhost:13305/api/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"SD-Turbo","prompt":"a red apple on a wooden table","size":"512x512"}' \
+  | jq -r '.data[0].b64_json' | base64 -d > out.png
+```
+
+Lemond logs should show `Starting server on port 8001 (backend: rocm)` and *no* `Installing sd-server` line — sd-server is invoked directly from the nix store.
 
 To run a multi-backend benchmark and detect silent CPU fallbacks:
 
