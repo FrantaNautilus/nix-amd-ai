@@ -120,6 +120,11 @@ in {
         XILINX_XRT = "${xrt-combined}";
         XRT_PATH = "${xrt-combined}";
       }
+      // optionalAttrs cfg.enableFastFlowLM {
+        # nix manages the version; FLM's auto-update probe on every run/serve
+        # is noise on a read-only nix-store binary. New in FLM 0.9.41.
+        FLM_DISABLE_UPDATE_CHECK = "1";
+      }
       // optionalAttrs cfg.enableLemonade {
         # CPU recipes work on every host, no GPU enable flag needed.
         LEMONADE_LLAMACPP_CPU_BIN = "${pkgs.llama-cpp}/bin/llama-server";
@@ -210,7 +215,10 @@ in {
           ++ optionals cfg.enableVulkan [
             "LEMONADE_LLAMACPP_VULKAN_BIN=${pkgs.llama-cpp-vulkan}/bin/llama-server"
             "LEMONADE_WHISPERCPP_VULKAN_BIN=${pkgs.whisper-cpp-vulkan}/bin/whisper-server"
-          ];
+          ]
+          # Suppress FLM's auto-update probe in the lemond-spawned subprocess.
+          # New in FLM 0.9.41.
+          ++ optional cfg.enableFastFlowLM "FLM_DISABLE_UPDATE_CHECK=1";
       };
     };
   };
